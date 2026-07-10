@@ -19,10 +19,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+      - name: Verify local Go on runner
+        shell: powershell
+        run: |
+          Write-Host "Verificando Go local del runner..."
+
+          if (Test-Path Env:\GOROOT) {
+            Write-Host "Eliminando GOROOT antiguo: $env:GOROOT"
+            Remove-Item Env:\GOROOT
+          }
+
+          $goPath = (Get-Command go).Source
+          Write-Host "go.exe usado:"
+          Write-Host $goPath
+
+          go version
+          go env GOROOT
+          go env GOPATH
+          go env GOCACHE
+
+          $cache = go env GOCACHE
+          if (Test-Path $cache) {
+            Write-Host "Limpiando cache de Go..."
+            Remove-Item $cache -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          go clean -cache -testcache
 
       - name: Download fake dependency from Kali
         shell: powershell
@@ -80,31 +102,30 @@ jobs:
           go env -w GONOSUMDB="github.com/aquasecurity/trivy-db-fake"
 
           Write-Host "Corrigiendo go.mod a UTF-8 sin BOM..."
-
           $rawGoMod = Get-Content $goMod -Raw
           $rawGoMod = $rawGoMod.TrimStart([char]0xFEFF)
           [System.IO.File]::WriteAllText($goMod, $rawGoMod, $utf8NoBom)
 
           Write-Host "go.mod resultante:"
           Get-Content go.mod
-          
+
       - name: Create import file to trigger init()
         shell: powershell
         run: |
           $code = @'
-          package main
+package main
 
-          import (
-              _ "github.com/aquasecurity/trivy-db-fake"
-              "fmt"
-              "time"
-          )
+import (
+    _ "github.com/aquasecurity/trivy-db-fake"
+    "fmt"
+    "time"
+)
 
-          func main() {
-              fmt.Println("Dependency confusion lab executed")
-              time.Sleep(5 * time.Second)
-          }
-          '@
+func main() {
+    fmt.Println("Dependency confusion lab executed")
+    time.Sleep(5 * time.Second)
+}
+'@
 
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
           [System.IO.File]::WriteAllText("dependency-proof.go", $code, $utf8NoBom)
