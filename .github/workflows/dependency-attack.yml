@@ -135,4 +135,27 @@ jobs:
       - name: Verify fake package was imported
         shell: powershell
         run: |
-          go list -m all | Select-String "trivy-db-fake"
+          Write-Host "Verificando evidencia local sin resolver dependencias externas..."
+
+          if (Test-Path ".\_labdeps\trivy-db-fake\go.mod") {
+            Write-Host "[OK] Dependencia falsa descargada en _labdeps\trivy-db-fake"
+          } else {
+            Write-Error "No existe _labdeps\trivy-db-fake\go.mod"
+            exit 1
+          }
+
+          if (Select-String -Path "go.mod" -Pattern "trivy-db-fake") {
+            Write-Host "[OK] go.mod contiene la dependencia falsa"
+          } else {
+            Write-Error "go.mod no contiene trivy-db-fake"
+            exit 1
+          }
+
+          if (Select-String -Path "dependency-proof.go" -Pattern "trivy-db-fake") {
+            Write-Host "[OK] dependency-proof.go importó la dependencia falsa"
+          } else {
+            Write-Error "dependency-proof.go no importó trivy-db-fake"
+            exit 1
+          }
+
+          Write-Host "[OK] Verificación final completada sin descargar dependencias externas"
