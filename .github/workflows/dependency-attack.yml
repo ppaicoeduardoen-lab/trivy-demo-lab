@@ -34,17 +34,31 @@ jobs:
       - name: Configure Go to use fake dependency
         shell: powershell
         run: |
-          $extractDir = "$env:TEMP\trivy-db-fake"
-          $goPath = $extractDir.Replace("\", "/")
-          
-          Write-Host "Adding replace directive..."
-          go mod edit -replace github.com/aquasecurity/trivy-db-fake=$goPath
-          
-          Write-Host "Disabling sumdb for fake package..."
+          Write-Host "Limpiando go.mod de entradas previas..."
+
+          $goMod = "go.mod"
+          $content = Get-Content $goMod
+          $content = $content | Where-Object { $_ -notmatch "trivy-db-fake" }
+          Set-Content $goMod $content -Encoding UTF8
+
+          $depPath = "$env:GITHUB_WORKSPACE\_labdeps\trivy-db-fake"
+
+          if (!(Test-Path "$depPath\go.mod")) {
+            Write-Error "No se encontró go.mod en $depPath"
+            exit 1
+          }
+
+          Write-Host "Agregando replace local correcto..."
+          go mod edit -replace "github.com/aquasecurity/trivy-db-fake=./_labdeps/trivy-db-fake"
+
+          Write-Host "Agregando dependencia fake al go.mod..."
+          go mod edit -require "github.com/aquasecurity/trivy-db-fake@v1.0.0"
+
+          Write-Host "Deshabilitando sumdb solo para el paquete fake de laboratorio..."
           go env -w GONOSUMDB="github.com/aquasecurity/trivy-db-fake"
-          
-          Write-Host "Adding fake dependency to go.mod..."
-          go mod edit -require github.com/aquasecurity/trivy-db-fake@v1.0.0
+
+          Write-Host "go.mod resultante:"
+          Get-Content go.mod
       
       - name: Create import file to trigger init()
         shell: powershell
