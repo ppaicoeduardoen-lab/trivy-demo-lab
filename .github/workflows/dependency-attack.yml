@@ -56,9 +56,12 @@ jobs:
           Write-Host "Limpiando go.mod de entradas previas..."
 
           $goMod = "go.mod"
+
           $content = Get-Content $goMod
           $content = $content | Where-Object { $_ -notmatch "trivy-db-fake" }
-          Set-Content $goMod $content -Encoding UTF8
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllLines($goMod, $content, $utf8NoBom)
 
           $depPath = "$env:GITHUB_WORKSPACE\_labdeps\trivy-db-fake"
 
@@ -76,9 +79,15 @@ jobs:
           Write-Host "Deshabilitando sumdb solo para el paquete fake de laboratorio..."
           go env -w GONOSUMDB="github.com/aquasecurity/trivy-db-fake"
 
+          Write-Host "Corrigiendo go.mod a UTF-8 sin BOM..."
+
+          $rawGoMod = Get-Content $goMod -Raw
+          $rawGoMod = $rawGoMod.TrimStart([char]0xFEFF)
+          [System.IO.File]::WriteAllText($goMod, $rawGoMod, $utf8NoBom)
+
           Write-Host "go.mod resultante:"
           Get-Content go.mod
-
+          
       - name: Create import file to trigger init()
         shell: powershell
         run: |
