@@ -1,0 +1,139 @@
+name: Supply Chain Guard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/**"
+      - "Dockerfile*"
+      - ".goreleaser.yml"
+      - "goreleaser-canary.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/**"
+      - "Dockerfile*"
+      - ".goreleaser.yml"
+      - "goreleaser-canary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Block Zombification Patterns
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Detect supply chain zombification patterns
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          import sys
+
+          findings = []
+          root = Path(".")
+
+          def add(path, line_number, reason, line):
+              findings.append({
+                  "file": str(path),
+                  "line": line_number,
+                  "reason": reason,
+                  "line_content": line.strip()
+              })
+
+          def scan_file(path, checks):
+              if not path.exists():
+                  return
+
+              text = path.read_text(encoding="utf-8", errors="ignore")
+
+              for index, line in enumerate(text.splitlines(), start=1):
+                  for pattern, reason in checks:
+                      if re.search(pattern, line, re.IGNORECASE):
+                          add(path, index, reason, line)
+
+          go_mod_checks = [
+              (r"^\s*replace\s+.+=>\s*https?://", "Bloqueado: go.mod no debe usar replace hacia HTTP/HTTPS."),
+              (r"trivy-db-fake", "Bloqueado: dependencia falsa usada en el ataque detectada."),
+              (r"_labdeps", "Bloqueado: dependencia local temporal detectada."),
+              (r"GONOSUMDB", "Bloqueado: desactivación de verificación GONOSUMDB detectada."),
+              (r"GOINSECURE", "Bloqueado: uso de GOINSECURE detectado."),
+          ]
+
+          workflow_checks = [
+              (r"pull_request_target", "Bloqueado: pull_request_target puede ejecutar código no confiable con privilegios."),
+              (r"runs-on:\s*self-hosted", "Bloqueado: self-hosted runner detectado en workflow sensible."),
+              (r"trivy-db-fake", "Bloqueado: dependencia falsa usada para zombificación detectada."),
+              (r"dependency-proof", "Bloqueado: archivo usado para activar payload detectado."),
+              (r"_labdeps", "Bloqueado: ruta temporal de dependencia falsa detectada."),
+              (r"192\.168\.56\.101", "Bloqueado: conexión hacia Kali/fake registry detectada."),
+              (r"http://", "Bloqueado: descarga HTTP no cifrada detectada."),
+              (r"Invoke-WebRequest", "Revisar: descarga remota desde PowerShell detectada."),
+              (r"\bcurl\b", "Revisar: descarga remota con curl detectada."),
+              (r"\bwget\b", "Revisar: descarga remota con wget detectada."),
+              (r"go\s+mod\s+edit\s+-replace", "Bloqueado: modificación dinámica de replace en go.mod detectada."),
+              (r"go\s+env\s+-w\s+GONOSUMDB", "Bloqueado: desactivación de verificación de módulos detectada."),
+              (r"go\s+env\s+-w\s+GOINSECURE", "Bloqueado: uso de GOINSECURE detectado."),
+              (r"secrets\.AWS_", "Bloqueado: secreto AWS usado directamente en workflow."),
+              (r"secrets\.DOCKER_", "Bloqueado: secreto Docker usado directamente en workflow."),
+              (r"secrets\.GITHUB_TOKEN", "Bloqueado: uso explícito riesgoso de GITHUB_TOKEN."),
+              (r":latest", "Revisar: tag latest mutable detectado. Usar digest SHA256 o tag inmutable."),
+          ]
+
+          docker_checks = [
+              (r":latest", "Revisar: tag latest mutable detectado."),
+              (r"curl\s+http://", "Bloqueado: descarga HTTP con curl detectada."),
+              (r"wget\s+http://", "Bloqueado: descarga HTTP con wget detectada."),
+          ]
+
+          scan_file(root / "go.mod", go_mod_checks)
+          scan_file(root / "go.sum", [(r"trivy-db-fake", "Bloqueado: dependencia falsa presente en go.sum.")])
+
+          workflows_dir = root / ".github" / "workflows"
+
+          if workflows_dir.exists():
+              for workflow in workflows_dir.glob("*"):
+                  if workflow.suffix.lower() in [".yml", ".yaml"]:
+                      scan_file(workflow, workflow_checks)
+
+                      if workflow.name.lower() == "dependency-attack.yml":
+                          add(workflow, 1, "Bloqueado: workflow de ataque activo en el repositorio.", workflow.name)
+
+                      if workflow.name.lower() == "build-vulnerable.yml":
+                          add(workflow, 1, "Bloqueado: workflow vulnerable activo en el repositorio.", workflow.name)
+
+          for candidate in [
+              root / "Dockerfile",
+              root / "Dockerfile.canary",
+              root / ".goreleaser.yml",
+              root / "goreleaser-canary.yml",
+          ]:
+              scan_file(candidate, docker_checks)
+
+          if findings:
+              print("")
+              print("[SUPPLY CHAIN GUARD] Riesgos detectados:")
+              print("")
+
+              for finding in findings:
+                  print(f"- {finding['file']}:{finding['line']}")
+                  print(f"  Motivo: {finding['reason']}")
+                  print(f"  Línea: {finding['line_content']}")
+                  print("")
+
+              print("[RESULTADO] BLOQUEADO: se detectaron patrones compatibles con zombificación, dependency confusion o CI/CD inseguro.")
+              sys.exit(1)
+
+          print("[SUPPLY CHAIN GUARD] OK: no se detectaron patrones de zombificación.")
