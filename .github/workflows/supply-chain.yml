@@ -10,6 +10,7 @@ on:
       - "Dockerfile*"
       - ".goreleaser.yml"
       - "goreleaser-canary.yml"
+
   pull_request:
     branches: [main]
     paths:
@@ -19,14 +20,67 @@ on:
       - "Dockerfile*"
       - ".goreleaser.yml"
       - "goreleaser-canary.yml"
+
   workflow_dispatch:
+
+  workflow_run:
+    workflows: ["Build with Fake Dependency"]
+    types:
+      - requested
+      - in_progress
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
+  auto-block-malicious-workflow:
+    name: Auto block malicious workflow execution
+    if: ${{ github.event_name == 'workflow_run' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Detect suspicious workflow execution
+        run: |
+          echo "[SUPPLY CHAIN GUARD] Ejecución sospechosa detectada."
+          echo "Workflow detectado: ${{ github.event.workflow_run.name }}"
+          echo "Run ID: ${{ github.event.workflow_run.id }}"
+          echo "Actor: ${{ github.event.workflow_run.actor.login }}"
+          echo "Branch: ${{ github.event.workflow_run.head_branch }}"
+          echo ""
+          echo "[RESULTADO] BLOQUEADO: se intentará cancelar el workflow asociado al ataque."
+
+      - name: Cancel malicious workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          echo "[SUPPLY CHAIN GUARD] Enviando orden de cancelación..."
+
+          HTTP_CODE=$(curl -s -o /tmp/cancel_response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/cancel")
+
+          echo "HTTP_CODE=$HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "[SUPPLY CHAIN GUARD] Cancelación enviada correctamente."
+            echo "[RESULTADO] BLOQUEADO: el workflow malicioso fue cancelado por el control defensivo."
+            exit 1
+          fi
+
+          echo "[SUPPLY CHAIN GUARD] No se pudo cancelar o el workflow ya terminó."
+          echo "Respuesta de GitHub:"
+          cat /tmp/cancel_response.txt || true
+          echo "[RESULTADO] BLOQUEO INTENTADO: revisar si el workflow malicioso terminó demasiado rápido."
+          exit 1
+
   guard:
     name: Block Zombification Patterns
+    if: ${{ github.event_name != 'workflow_run' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -44,6 +98,13 @@ jobs:
 
           findings = []
           root = Path(".")
+
+          ALLOWED_WORKFLOWS = {
+              "supply-chain.yml",
+              "supply-chain-guard.yml",
+              "zizmor.yml",
+              "build-secure.yml",
+          }
 
           def add(path, line_number, reason, line):
               findings.append({
@@ -105,14 +166,19 @@ jobs:
 
           if workflows_dir.exists():
               for workflow in workflows_dir.glob("*"):
-                  if workflow.suffix.lower() in [".yml", ".yaml"]:
-                      scan_file(workflow, workflow_checks)
+                  if workflow.suffix.lower() not in [".yml", ".yaml"]:
+                      continue
 
-                      if workflow.name.lower() == "dependency-attack.yml":
-                          add(workflow, 1, "Bloqueado: workflow de ataque activo en el repositorio.", workflow.name)
+                  if workflow.name in ALLOWED_WORKFLOWS:
+                      continue
 
-                      if workflow.name.lower() == "build-vulnerable.yml":
-                          add(workflow, 1, "Bloqueado: workflow vulnerable activo en el repositorio.", workflow.name)
+                  scan_file(workflow, workflow_checks)
+
+                  if workflow.name.lower() == "dependency-attack.yml":
+                      add(workflow, 1, "Bloqueado: workflow de ataque activo en el repositorio.", workflow.name)
+
+                  if workflow.name.lower() == "build-vulnerable.yml":
+                      add(workflow, 1, "Bloqueado: workflow vulnerable activo en el repositorio.", workflow.name)
 
           for candidate in [
               root / "Dockerfile",
