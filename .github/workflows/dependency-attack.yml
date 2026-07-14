@@ -16,6 +16,12 @@ jobs:
       LAB_AWS_ACCESS_KEY_ID: fake_lab_aws_key_789
 
     steps:
+      - name: Emit Wazuh lab telemetry
+        shell: powershell
+        run: |
+          $log = "C:\actions-runner\_work\trivy-demo-lab\security-lab-events.log"
+          New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+          Add-Content -Path $log -Value "$(Get-Date -Format o) LAB-Trivy dependency_confusion_lab trivy-db-fake dependency-attack.yml workflow_dispatch 192.168.56.101 LAB_GITHUB_TOKEN LAB_DOCKER_PASSWORD LAB_AWS_ACCESS_KEY_ID"
       - name: Checkout
         uses: actions/checkout@v4
 
